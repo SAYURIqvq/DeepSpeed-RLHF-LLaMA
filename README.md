@@ -1,29 +1,44 @@
-# alpaca-rlhf
-Finetuning LLaMA with RLHF (Reinforcement Learning with Human Feedback).
+# DeepSpeed-RLHF-LLaMA
 
-## Online Demo
-- [SFT](https://d03f7b0466275d4f9e.gradio.live/)
-- [RLHF](https://88aeeb3aef5040507e.gradio.live/)
+基于人类反馈强化学习（RLHF）对 LLaMA 进行微调。
 
-## Modifications on DeepSpeed Chat
-### Step 1
+## 基于 DeepSpeed Chat 的改动
+
+### 第一步（Step 1）
+
 - alpaca_rlhf/deepspeed_chat/training/step1_supervised_finetuning/main.py#main()
-  - Set special tokens
-    - ![](./figures/modifications/step1/special_tokens.png)
+
+- 设置特殊标记（special tokens）
+
+- ![](./figures/modifications/step1/special_tokens.png)
+
 - alpaca_rlhf/deepspeed_chat/training/utils/data/data_utils.py#create_dataset_split()
-  - Train only on responses and add eos
-    - ![](./figures/modifications/step1/train_only_on_responses.png)
-  - Remove end_of_conversation_token
-    - ![](./figures/modifications/step1/remove_eoc.png)
+
+- 仅在回复部分进行训练，并添加 EOS（结束标记）
+
+- ![](./figures/modifications/step1/train_only_on_responses.png)
+
+- 移除对话结束标记（end_of_conversation_token）
+
+- ![](./figures/modifications/step1/remove_eoc.png)
+
 - alpaca_rlhf/deepspeed_chat/training/utils/data/data_utils.py#PromptDataset#__getitem__
-  - Labels differs from input
-    - ![](./figures/modifications/step1/lables_differ_from_input.png)
+
+- 标签（labels）与输入（input）不同
+
+- ![](./figures/modifications/step1/lables_differ_from_input.png)
+
 - alpaca_rlhf/deepspeed_chat/training/utils/data/raw_datasets.py#MultiTurnAlpacaDataset
-  - add MultiTurnAlpacaDataset
-    - ![](./figures/modifications/step1/multi_turn_alpaca_dataset.png)
+
+- 新增 MultiTurnAlpacaDataset（多轮对话数据集）
+
+- ![](./figures/modifications/step1/multi_turn_alpaca_dataset.png)
+
 - alpaca_rlhf/deepspeed_chat/training/utils/module/lora.py#convert_linear_layer_to_lora
-  - Support multiple module names for lora
-    - ![](./figures/modifications/step1/multi_lora_part_names.png)
+
+- 支持 LoRA 多模块名称
+
+- ![](./figures/modifications/step1/multi_lora_part_names.png)
 
 ### Step 2
 - alpaca_rlhf/deepspeed_chat/training/step2_reward_model_finetuning/main.py#main()
