@@ -1,6 +1,104 @@
 # DeepSpeed-RLHF-LLaMA
 
-基于人类反馈强化学习（RLHF）对 LLaMA 进行微调。
+DeepSpeed-RLHF-LLaMA 是一个实用的端到端实现，旨在使用**基于人类反馈的强化学习（RLHF）**对 LLaMA 大语言模型进行微调。本项目基于微软 DeepSpeed-Chat 框架的修改版本构建，专门针对 LLaMA 架构调整了整个 InstructGPT 风格的训练流水线，包含尚未合并到上游的关键错误修复，并提供了一个开箱即用的 Gradio 界面，用于并排对比仅 SFT 模型与 RLHF 对齐模型。
+
+本项目的核心目标是将出了名复杂的三阶段 RLHF 流水线（该项目实现了经典的 InstructGPT 流水线：监督微调 → 奖励模型 → 基于 PPO 的 RLHF。）——监督微调、奖励模型训练以及基于 PPO 的强化学习——在消费级多 GPU 设置（例如 2× A100 80GB）上实现可复现，而无需依赖工业级集群。每个训练步骤均已进行端到端验证，训练曲线和可视化对比作为证据保留在代码库中。
+
+
+## 项目结构
+
+<img width="1705" height="756" alt="image" src="https://github.com/user-attachments/assets/3d1bc7d5-38d2-4f8c-afc3-2dd2c4a0a978" />
+
+<img width="1692" height="105" alt="image" src="https://github.com/user-attachments/assets/f9c99465-97db-4456-8cb7-1218a8482340" />
+
+
+代码库主要分为三个区域：训练引擎（alpaca_rlhf/deepspeed_chat/training/）、推理接口（alpaca_rlhf/inference/）以及配置资源（templates/、data/、figures/）。
+
+```bash
+alpaca-rlhf/
+
+├── 📂 alpaca_rlhf/
+│   ├── 📂 deepspeed_chat/
+│   │   ├── chat.py                    # 聊天推理的命令行入口
+│   │   ├── train.py                   # 统一的 3 步训练入口
+│   │   ├── 📂 training/
+│   │   │   ├── 📂 step1_supervised_finetuning/   # 阶段 1: SFT
+│   │   │   ├── 📂 step2_reward_model_finetuning/ # 阶段 2: Reward Model
+│   │   │   ├── 📂 step3_rlhf_finetuning/         # 阶段 3: PPO/RLHF
+│   │   │   │   ├── ppo_trainer.py                # PPO 训练循环
+│   │   │   │   └── rlhf_engine.py               # 多模型引擎
+│   │   │   └── 📂 utils/
+│   │   │       ├── 📂 data/
+│   │   │       │   ├── data_utils.py             # 数据集创建与整理
+│   │   │       │   └── raw_datasets.py           # 14+ 数据集适配器
+│   │   │       ├── 📂 model/
+│   │   │       │   ├── model_utils.py            # HF 模型创建辅助函数
+│   │   │       │   └── reward_model.py           # RewardModel 类
+│   │   │       └── 📂 module/
+│   │   │           └── lora.py                   # LoRA 实现
+│   │   └── 📂 inference/
+│   ├── 📂 inference/
+│   │   └── llama_chatbot_gradio.py     # Gradio 演示应用
+│   ├── 📂 tools/                       # 数据集与模型下载器
+│   └── 📂 eda/                         # 探索性数据分析脚本
+├── 📂 templates/                       # 提示词模板 JSON 文件
+├── 📂 figures/                         # 训练曲线与错误修复对比
+├── run.sh                              # DeepSpeed 启动器（训练）
+├── run_inference.sh                    # Python 启动器（推理）
+└── requirements.txt                    # 依赖项
+```
+
+## 三阶段 RLHF 训练流程（Three-Stage RLHF Pipeline）
+
+每个阶段作为独立的入口点运行，依次消费上一阶段的输出并生成新的模型检查点。该设计使训练流程模块化、可复现且易于调试。
+
+### 📊 阶段概览
+
+| 阶段 | 脚本 | 输入模型 | 输出 | 目的 |
+|------|------|----------|------|------|
+| Step 1 — SFT | `step1_supervised_finetuning/main.py` | LLaMA-7B（base） | SFT Actor 检查点 | 通过监督数据学习指令跟随能力 |
+| Step 2 — Reward Model | `step2_reward_model_finetuning/main.py` | LLaMA-7B（base） | Reward Model 检查点 | 从人类偏好数据中学习评分函数 |
+| Step 3 — RLHF | `step3_rlhf_finetuning/main.py` | SFT Actor + Reward Model | RLHF 对齐 Actor | 使用 PPO 进行对齐优化，使输出更符合人类偏好 |
+
+---
+
+### 🔍 各阶段细节
+
+- **阶段 1（SFT）**
+  - 支持标准 `Dahoas/rm-static` 数据集
+  - 支持自定义 `MultiTurnAlpaca` 数据集（多轮对话）
+  - 目标：学习基础指令跟随能力（instruction following）
+
+- **阶段 2（Reward Model）**
+  - 使用 `chosen / rejected` 响应对
+  - 训练目标：成对排序损失（pairwise ranking loss）
+  - 输出一个用于打分的 Reward Model
+
+- **阶段 3（RLHF）**
+  - 将 SFT Actor + Reward Model + Reference Model + Critic 组合到 `DeepSpeedRLHFEngine`
+  - 使用 PPO（Proximal Policy Optimization）进行强化学习训练
+  - 优化目标：在保持语言能力的同时对齐人类偏好
+
+---
+
+### ⚙️ 训练流程总结
+
+```text
+Base Model (LLaMA-7B)
+        ↓
+Step 1: SFT
+        ↓
+SFT Actor
+        ↓
+Step 2: Reward Model
+        ↓
+Reward Model
+        ↓
+Step 3: PPO (RLHF)
+        ↓
+Aligned Actor (Final Model)
+```
+
 
 ## 基于 DeepSpeed Chat 的改动
 
